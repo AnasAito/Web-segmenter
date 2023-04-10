@@ -198,7 +198,10 @@ def clean_graph(graph):
 
 
 def url_to_graph(url):
-    r = requests.get(url)
+    # r = requests.get(url)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'}
+    r = requests.get(url, headers=headers)
     soup = BeautifulSoup(r.text, 'html.parser').body
     _full_graph = nx.DiGraph()
     _global_counter = 0
@@ -340,14 +343,20 @@ def get_central_nodes(graph):
 
 
 def is_grid(graph, node_id):
-    # flag lists
-    neighbors = [n['id'] for n in get_neighbors(graph, node_id)]
+    # flag lists (skip links)
+    neighbors = [n['id'] for n in get_neighbors(
+        graph, node_id) if graph.nodes[n['id']]['link_meta'] is None]
+    neighbors_class = [graph.nodes[n]['class'] for n in neighbors]
     neighbors_weight = [len(list(nx.descendants(graph, node)))
                         for node in neighbors]
 
     is_grid_element = (len(set(neighbors_weight)) ==
                        1) and (sum(neighbors_weight) != 0)
-    return is_grid_element
+    # detect grid based on class of grid_items
+    is_grid_element_sc_2 = len(set(neighbors_class)) == 1 and len(
+        neighbors) > 1 and (sum(neighbors_weight) != 0)
+
+    return is_grid_element or is_grid_element_sc_2
 
 
 def is_leaf(graph, node_id):
@@ -374,6 +383,7 @@ def get_unique_links(links):
 def get_summary(graph, node_id):
     summary = {
         'id': node_id,
+        # 'label': get_node(label),
         'content': [],
         'links': []
     }
@@ -399,7 +409,8 @@ def get_summary(graph, node_id):
             # print('is grid', node)
 
             grid_items = get_neighbors(graph, node)
-            grid_items = [_node['id'] for _node in grid_items]
+            grid_items = [
+                _node['id'] for _node in grid_items if graph.nodes[_node['id']]['link_meta'] is None]
             grid_items_content = []
             for item in grid_items:
                 _item_summary = {
@@ -415,6 +426,7 @@ def get_summary(graph, node_id):
                 for atom in all_childs_contentfull:
 
                     if graph.nodes[atom]['payload']['text'] != '' and graph.nodes[atom]['link_meta'] is None:
+                        # print(graph.nodes[atom])
                         text_content.append({
                             'type': 'atom',
                             'payload': graph.nodes[atom]['payload']['text']
@@ -435,26 +447,28 @@ def get_summary(graph, node_id):
         elif is_leaf(graph, node):
             # print('has_leaf', node)
             if graph.nodes[node]['payload'] is not None:
-                summary['content'] += [
-                    {
-                        'type': 'atom',
-                        'payload': graph.nodes[node]['payload']['text'],
-                        'index': graph.nodes[node]['item_index']
-                    }
-                ]
+                if graph.nodes[node]['payload']['text'] != '' and graph.nodes[node]['link_meta'] is None:
+                    summary['content'] .append(
+                        {
+                            'type': 'atom',
+                            'payload': graph.nodes[node]['payload']['text'],
+                            'index': graph.nodes[node]['item_index']
+                        }
+                    )
             for n in graph.neighbors(node):
 
                 if graph.nodes[n]['payload']['text'] != '' and graph.nodes[n]['link_meta'] is None:
-                    summary['content'] += [
+                    # print(graph.nodes[n])
+                    summary['content'].append(
                         {
                             'type': 'atom',
                             'payload': graph.nodes[n]['payload']['text'],
                             'index': graph.nodes[n]['item_index']
                         }
-                    ]
+                    )
 
         else:
-            print('not leaf or grid', node)
+            # print('not leaf or grid', node)
             # get all sub childs
             all_childs = list(nx.descendants(graph, node))
             all_childs_contentfull = [
@@ -462,6 +476,7 @@ def get_summary(graph, node_id):
             for atom in all_childs_contentfull:
 
                 if graph.nodes[atom]['payload']['text'] != '' and graph.nodes[atom]['link_meta'] is None:
+                    # print(graph.nodes[atom])
                     summary['content'].append(
                         {
                             'type': 'atom',
@@ -471,7 +486,7 @@ def get_summary(graph, node_id):
                     )
 
     # sort
-    summary['content'] = sorted(summary['content'], key=lambda x: x['index']),
+    # summary['content'] = sorted(summary['content'], key=lambda x: x['index']),
     return summary
 
 
@@ -489,17 +504,86 @@ class WebSegmenter:
     def __init__(self, url: str):
         self.url = url
         self.graph = None
-        self.ranked_nodes = None
+        self.ranked_nodes = {}
 
     def run(self):
         graph = url_to_graph(self.url)
         graph = simplify_link_nodes(graph)
         self.graph = clean_graph(graph)
-        self.ranked_nodes = get_central_nodes(self.graph)
+        ranked_nodes = get_central_nodes(self.graph)
+        # classify nodes
+        for node_id, meta in ranked_nodes.items():
+            item_sumary = self.summarize(node_id)
+            item_class = self.classify_node(item_sumary)
+            meta['item_class'] = item_class
+            self.ranked_nodes[node_id] = meta
 
-    def search(self, keyword):
+    def search(self, keyword: str, advance_search=None):
+        # TODO : skip conflicting containers
         keyword = keyword.lower()
-        return [(node_id, meta) for node_id, meta in self.ranked_nodes.items() if keyword in meta['label'].lower()]
+        if advance_search is None:
+            items = [(node_id, meta) for node_id, meta in self.ranked_nodes.items(
+            ) if keyword in meta['label'].lower()]
+            return items
+        item_class_in = advance_search.get('item_class_in', False)
+        search_in_links = advance_search.get('search_in_links', False)
+        # print('search config : ', item_class_in, search_in_links)
+        if item_class_in and search_in_links:
+            items_filtred = []
+            all_items = [(node_id, meta) for node_id, meta in self.ranked_nodes.items(
+            ) if meta['item_class'] in item_class_in]
+            for item, meta in all_items:
+                item_summary = self.summarize(item)
+                links = [link
+                         for link in item_summary['links'] if link['href'] is not None]
+                # print(links)
+                links = [link['href']
+                         for link in links if keyword in link['href']]
+                # print(links)
+                if len(links) > 0:
+                    # if class_in active filter :
+                    items_filtred.append((item, meta))
+            return items_filtred
+        if item_class_in:
+            return [(node_id, meta) for node_id, meta in self.ranked_nodes.items() if meta['item_class'] in item_class_in and keyword in meta['label'].lower()]
+        if search_in_links:
+            items_filtred = []
+            all_items = [(node_id, meta)
+                         for node_id, meta in self.ranked_nodes.items()]
+            for item, meta in all_items:
+                item_summary = self.summarize(item)
+                links = [link
+                         for link in item_summary['links'] if link['href'] is not None]
+                # print(links)
+                links = [link['href']
+                         for link in links if keyword in link['href']]
+                # print(links)
+                if len(links) > 0:
+                    # if class_in active filter :
+                    items_filtred.append((item, meta))
+            return items_filtred
 
     def summarize(self, node_id):
-        return get_summary(self.graph, node_id)
+        summary = get_summary(self.graph, node_id)
+        return summary
+
+    def classify_node(self, summary):
+        # class_a : links_list
+        is_uni_text = len(summary['content']) == 1
+        has_links = len(summary['links']) > 0
+        has_grid = len([item for item in summary['content']
+                       if item['type'] == 'grid']) > 0
+
+        is_paragraph = sum([len(list(self.graph.neighbors(n)))
+                           for n in self.graph.neighbors(summary['id'])]) == 0
+        if is_uni_text and has_links:
+            return 'links_list'
+        # class_b : has_grid
+        if has_grid:
+            has_multiple_items = len([item for item in summary['content']
+                                      if item['type'] == 'grid'][0]['payload']) > 1
+            if has_multiple_items:
+                return 'has_grid'
+        if is_paragraph:
+            return 'is_paragraph'
+        return 'other'
