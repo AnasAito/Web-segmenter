@@ -90,7 +90,7 @@ def normalize_element(element):
             }
         is_valid = False
     # scripts,img,ipframe,noscript,svg are not valid
-    if element_name in ['script', 'img', 'noscript', 'svg', 'input', 'style', 'form', 'kin-address-form', 'figcaption', 'picture']:
+    if element_name in ['script', 'img', 'noscript', 'svg', 'input', 'style', 'kin-address-form', 'figcaption', 'picture']:
         is_valid = False
     return {
         'is_valid': is_valid,
@@ -114,7 +114,7 @@ def _traverse_html(_soup, _graph: nx.Graph, _counter, global_counter, _parent=No
     # print('parent',_parent ,_soup.contents )
     for element in _soup.contents:
         element_norm = normalize_element(element)
-        #  print(element_norm)
+        # print(element_norm)
         if element_norm['is_valid']:
             element_content = element_norm['element']
             #  print(element_content, type(element_content))
@@ -131,6 +131,7 @@ def _traverse_html(_soup, _graph: nx.Graph, _counter, global_counter, _parent=No
             _element_name = f"{element_name}_{_name_count}_{element_class}"
             node_id = encode_element(element_name)
             node_id = _element_name
+            # print(_element_name)
 
             try:
                 if _parent is not None:
@@ -202,11 +203,13 @@ def url_to_graph(url):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'}
     r = requests.get(url, headers=headers)
+
     soup = BeautifulSoup(r.text, 'html.parser').body
     _full_graph = nx.DiGraph()
     _global_counter = 0
     _traverse_html(soup, _full_graph, defaultdict(int), _global_counter)
     graph = populate_empty_meta(_full_graph)
+
     graph = clean_graph(graph)
     mapping = {node: encode_element(node) for node in graph.nodes}
     graph = nx.relabel_nodes(graph, mapping)
@@ -223,6 +226,8 @@ def simplify_link_nodes(graph):
 
     def summarize_link(graph, link):
         descendants_nodes = nx.descendants(graph, link)
+        # if graph.nodes[link]['payload'].get('href') == '/solutions':
+        #     print([graph.nodes[link]['payload'].get('text')])
         text_payload = [graph.nodes[link]['payload'].get('text')]
         for node in descendants_nodes:
             try:
@@ -233,8 +238,10 @@ def simplify_link_nodes(graph):
         text_payload = list(set(text_payload))
         atom_meta = {
             'href':  graph.nodes[link]['payload'].get('href'),
-            'text_payload': text_payload
+            'text_payload': [t for t in text_payload if t != '']
         }
+        # if graph.nodes[link]['payload'].get('href') == '/solutions':
+        #     print(atom_meta)
         nodes_to_delete = descendants_nodes
         node_to_update = link
         return node_to_update, atom_meta, nodes_to_delete
@@ -245,7 +252,18 @@ def simplify_link_nodes(graph):
                 graph, node)
 
             # update link node
-            attrs = {node_to_update: {"link_meta": atom_meta}}
+            href = graph.nodes[node]['payload']['href']
+
+            def get_link_text(node):
+                if graph.nodes[node]['payload']['text'] == '' and len(atom_meta['text_payload']) > 0:
+                    return atom_meta['text_payload'][0]
+                else:
+                    return ''
+
+            attrs = {node_to_update: {"link_meta": atom_meta,
+                                      'payload': {'href': href,
+                                                  'text': get_link_text(node)}}}
+
             nx.set_node_attributes(graph, attrs)
             # delete detail nodes
             nodes_to_delete = nodes_to_delete
@@ -570,11 +588,11 @@ class WebSegmenter:
     def classify_node(self, summary):
         # class_a : links_list
         is_uni_text = len(summary['content']) == 1
-        has_links = len(summary['links']) > 0
+        has_links = len(summary['links']) > 1
         has_grid = len([item for item in summary['content']
                        if item['type'] == 'grid']) > 0
 
-        is_paragraph = sum([len(list(self.graph.neighbors(n)))
+        is_paragraph = sum([len(list([_n for _n in self.graph.neighbors(n) if self.graph.nodes[_n]['link_meta'] is None]))
                            for n in self.graph.neighbors(summary['id'])]) == 0
         if is_uni_text and has_links:
             return 'links_list'
