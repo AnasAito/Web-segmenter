@@ -112,6 +112,8 @@ def has_payload(i):
 
 def _traverse_html(_soup, _graph: nx.Graph, _counter, global_counter, _parent=None) -> None:
     # print('parent',_parent ,_soup.contents )
+    #if not _soup.contents:
+    #    print('no content found in body')
     for element in _soup.contents:
         element_norm = normalize_element(element)
         # print(element_norm)
@@ -202,9 +204,20 @@ def url_to_graph(url):
     # r = requests.get(url)
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'}
-    r = requests.get(url, headers=headers)
+    
+    try:
+        r = requests.get(url, headers=headers)
+    except:
+        _full_graph = nx.DiGraph()
+        graph = populate_empty_meta(_full_graph)
+        return graph
+    # r = requests.get(url, headers=headers)
 
     soup = BeautifulSoup(r.text, 'html.parser').body
+    if soup is None:
+        _full_graph = nx.DiGraph()
+        graph = populate_empty_meta(_full_graph)
+        return graph
     _full_graph = nx.DiGraph()
     _global_counter = 0
     _traverse_html(soup, _full_graph, defaultdict(int), _global_counter)
