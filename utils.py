@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from collections import Counter
 import hashlib
 import networkx as nx
-from collections import defaultdict
+from collections import defaultdict, Counter
 from bs4 import BeautifulSoup as soup
 import itertools as it
 import time
@@ -129,7 +129,7 @@ def _traverse_html(_soup, _graph: nx.Graph, _counter, global_counter, _parent=No
                 element_class = None
                 # infer_payload = {'href':None,
                 #                   'text':element_content}
-            _name_count = _counter.get(element_name)
+            _name_count = _counter[element_name]
             _element_name = f"{element_name}_{_name_count}_{element_class}"
             node_id = encode_element(element_name)
             node_id = _element_name
@@ -220,7 +220,7 @@ def url_to_graph(url):
         return graph
     _full_graph = nx.DiGraph()
     _global_counter = 0
-    _traverse_html(soup, _full_graph, defaultdict(int), _global_counter)
+    _traverse_html(soup, _full_graph, Counter(), _global_counter)
     graph = populate_empty_meta(_full_graph)
 
     graph = clean_graph(graph)
